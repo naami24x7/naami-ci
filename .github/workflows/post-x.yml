@@ -1,0 +1,127 @@
+name: Post X
+
+# Runs in the PUBLIC naami-ci repo (free Actions minutes). Naami code is private: it is checked out below with CI_GH_TOKEN.
+# Secrets needed on THIS repo: X_SESSION_JSON (same value as on Naami) and CI_GH_TOKEN (PAT: read+write on naami24x7/Naami).
+# Results (.github/x-post-results/<id>.json) + device profile stay in the private Naami repo.
+
+# Posts to X via twikit (direct API, no browser) -- x_post_worker.py.
+# Runs on GitHub's hosted runner (not Render) so it's not sharing Render's
+# 0.1 CPU with other jobs, and because x_ci_trigger.py / this workflow's
+# result-push mechanism was already in place from when this used to run a
+# full browser (Playwright/Firefox) here -- that browser step is gone now,
+# this file just keeps using the same trigger/poll/fetch-result plumbing.
+
+on:
+  repository_dispatch:
+    types: [post_x]
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Write X session file
+        env:
+          X_SESSION_JSON: ${{ secrets.X_SESSION_JSON }}
+        run: |
+          if [ -z "$X_SESSION_JSON" ]; then
+            echo "❌ X_SESSION_JSON secret is not set on this repo — add it in Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          echo "$X_SESSION_JSON" > x_session.json
+
+      - name: Fetch persisted device profile (pinned user agent)
+        env:
+          GH_TOKEN: ${{ secrets.CI_GH_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GH_TOKEN" \
+               -H "Accept: application/vnd.github.raw" \
+               "https://api.github.com/repos/naami24x7/Naami/contents/.github/x-session-state/device_profile.json" \
+               -o x_device_profile.json
+          # If the file doesn't exist yet in the repo, the API returns a JSON
+          # error body starting with "{" — detect that and just remove it so
+          # the worker treats this as "no prior profile" instead of trying
+          # to json.load a 404 error payload.
+          if head -c 20 x_device_profile.json 2>/dev/null | grep -q '"message"'; then
+            rm -f x_device_profile.json
+            echo "no prior device profile in repo yet — will pin a new one this run"
+          fi
+
+      - name: Write payload
+        env:
+          X_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: echo "$X_PAYLOAD" > payload.json
+
+      - name: Post to X
+        run: python x_post_worker.py payload.json | tee result.json
+
+      - name: Push result to repo (so Render can read it back)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CI_GH_TOKEN }}
+          POST_ID: ${{ github.event.client_payload.post_id }}
+        run: |
+          python3 - <<'EOF'
+          import base64, json, os, urllib.request
+
+          token = os.environ["GH_TOKEN"]
+          post_id = os.environ.get("POST_ID") or "unknown"
+          repo = "naami24x7/Naami"
+
+          def push(local_file, remote_path, default_content):
+              try:
+                  with open(local_file, "rb") as f:
+                      content = f.read()
+              except FileNotFoundError:
+                  content = default_content
+
+              if content is None:
+                  return
+
+              api = f"https://api.github.com/repos/{repo}/contents/{remote_path}"
+              req = urllib.request.Request(api, headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json",
+              })
+              sha = None
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      sha = json.loads(resp.read())["sha"]
+              except Exception:
+                  pass
+
+              body = {
+                  "message": f"ci: x-post {remote_path} for {post_id} (auto)",
+                  "content": base64.b64encode(content).decode(),
+              }
+              if sha:
+                  body["sha"] = sha
+
+              req2 = urllib.request.Request(api, data=json.dumps(body).encode(),
+                                             headers={
+                                                 "Authorization": f"token {token}",
+                                                 "Accept": "application/vnd.github+json",
+                                                 "Content-Type": "application/json",
+                                             }, method="PUT")
+              with urllib.request.urlopen(req2) as resp:
+                  print(remote_path, resp.status)
+
+          push("result.json", f".github/x-post-results/{post_id}.json",
+               b'{"success": false, "error": "worker produced no output (likely crashed or was killed)"}')
+          push("x_device_profile.json", ".github/x-session-state/device_profile.json", None)
+          EOF
