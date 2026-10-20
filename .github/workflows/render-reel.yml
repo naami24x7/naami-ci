@@ -1,0 +1,104 @@
+name: Render Reel
+
+# Runs in the PUBLIC naami-ci repo (free Actions minutes). Naami code is private and is checked out at run time with CI_GH_TOKEN.
+# Secrets on THIS repo: CI_GH_TOKEN (PAT: read+write on naami24x7/Naami), X_SESSION_JSON, GROQ_API_KEY, OPENROUTER_API_KEY (same values as on Naami)
+
+on:
+  repository_dispatch:
+    types: [render_reel]
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: remotion/package-lock.json
+
+      - name: Install Remotion deps
+        working-directory: remotion
+        run: npm ci || npm install
+
+      - name: Install Remotion's headless Chromium
+        working-directory: remotion
+        run: npx remotion browser ensure
+        continue-on-error: true   # non-fatal — _build_flat_motion falls back to ffmpeg if this is missing
+
+      - name: Render reel
+        env:
+          REEL_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TQDM_DISABLE: '1'
+        run: python ci_render_reel.py
+
+      - name: Upload reel for review
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reel-${{ github.event.client_payload.reel_id }}
+          path: output/reel.mp4
+          retention-days: 3
+
+      - name: Push error log to repo (debug aid — bypasses blob-storage log hosting)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.CI_GH_TOKEN }}
+        run: |
+          if [ -f output/error.txt ]; then
+            python3 - <<'EOF'
+          import base64, json, os, urllib.request
+
+          token = os.environ["GH_TOKEN"]
+          repo = "naami24x7/Naami"
+          path = ".github/last-render-error.txt"
+          with open("output/error.txt", "rb") as f:
+              content = f.read()
+
+          api = f"https://api.github.com/repos/{repo}/contents/{path}"
+          req = urllib.request.Request(api, headers={
+              "Authorization": f"token {token}",
+              "Accept": "application/vnd.github+json",
+          })
+          sha = None
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  sha = json.loads(resp.read())["sha"]
+          except Exception:
+              pass
+
+          body = {
+              "message": "ci: log last render-reel failure (auto)",
+              "content": base64.b64encode(content).decode(),
+          }
+          if sha:
+              body["sha"] = sha
+
+          req2 = urllib.request.Request(api, data=json.dumps(body).encode(),
+                                         headers={
+                                             "Authorization": f"token {token}",
+                                             "Accept": "application/vnd.github+json",
+                                             "Content-Type": "application/json",
+                                         }, method="PUT")
+          with urllib.request.urlopen(req2) as resp:
+              print(resp.status)
+          EOF
+          fi

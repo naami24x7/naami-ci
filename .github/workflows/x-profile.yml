@@ -1,0 +1,74 @@
+name: X Profile Update
+
+# Runs in the PUBLIC naami-ci repo (free Actions minutes). Naami code is private and is checked out at run time with CI_GH_TOKEN.
+# Secrets on THIS repo: CI_GH_TOKEN (PAT: read+write on naami24x7/Naami), X_SESSION_JSON
+
+# One-off / on-demand: updates the X account's bio, avatar and banner via twikit
+# (x_profile_worker.py). Uses the same X_SESSION_JSON secret as post-x.yml.
+# Trigger: repository_dispatch type "x_profile" (client_payload = worker payload) or manual run.
+
+on:
+  repository_dispatch:
+    types: [x_profile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install twikit httpx
+
+      - name: Write X session file
+        env:
+          X_SESSION_JSON: ${{ secrets.X_SESSION_JSON }}
+        run: |
+          if [ -z "$X_SESSION_JSON" ]; then echo "X_SESSION_JSON secret missing"; exit 1; fi
+          echo "$X_SESSION_JSON" > x_session.json
+
+      - name: Fetch pinned device profile
+        env:
+          GH_TOKEN: ${{ secrets.CI_GH_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/naami24x7/Naami/contents/.github/x-session-state/device_profile.json" \
+            -o x_device_profile.json
+          if head -c 20 x_device_profile.json 2>/dev/null | grep -q '"message"'; then rm -f x_device_profile.json; fi
+
+      - name: Write payload
+        env:
+          X_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: |
+          if [ "$X_PAYLOAD" = "null" ] || [ -z "$X_PAYLOAD" ]; then
+            echo '{"expect_username":"iamcartigo","avatar":"assets/x_profile/avatar.png","banner":"assets/x_profile/banner.png"}' > payload.json
+          else
+            echo "$X_PAYLOAD" > payload.json
+          fi
+
+      - name: Update profile
+        run: python x_profile_worker.py payload.json | tee result.json
+
+      - name: Push result to repo
+        if: always()
+        run: |
+          mkdir -p .github/x-profile-results
+          cp result.json .github/x-profile-results/latest.json 2>/dev/null || echo '{"success": false, "error": "worker produced no output"}' > .github/x-profile-results/latest.json
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/x-profile-results/latest.json
+          git commit -m "ci: x-profile result (auto)" || true
+          git pull --rebase -q || true
+          git push || true
