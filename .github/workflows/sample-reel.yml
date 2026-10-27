@@ -1,0 +1,71 @@
+name: Sample Reel (photo only)
+
+# Manual. Builds the real "Top Discount Today" reel (v7) from 3 Zoe hot.json products using ONLY gallery photos (no seller clips)
+# and pushes mp4 + contact sheet to the `sample-reel` branch.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+          path: naami
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: naami
+        run: |
+          pip install -r requirements.txt playwright
+          python -m playwright install --with-deps chromium
+          cd remotion && (npm ci || npm install) && (npx remotion browser ensure || true)
+      - name: Fetch gallery photos
+        working-directory: naami
+        env:
+          JOB_ID: gallery_sample
+          ASINS: '["B07P1SFHK3","B07VWT4XRG","B0FL554TG9","B0HGXTDJF8","B0HCC15FNZ","B0F3X9LQQJ","B0HG8ZHBWN"]'
+        run: |
+          python -m x.gallery_ci
+          cp ../ci/hot.json . ; cp ../ci/sample_prep.py .
+          python sample_prep.py
+      - name: Render reel
+        working-directory: naami
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TQDM_DISABLE: '1'
+        run: |
+          export REEL_PAYLOAD="$(cat payload.json)"
+          python ci_render_reel.py
+      - name: Contact sheet
+        if: always()
+        working-directory: naami
+        run: |
+          [ -f output/reel.mp4 ] && ffmpeg -y -loglevel error -i output/reel.mp4 -vf "fps=1/4,scale=270:-1,tile=6x3" -frames:v 1 output/contact.jpg || true
+          ffprobe -v error -show_entries format=duration,size -of default=nw=1 output/reel.mp4 > output/report.txt 2>&1 || true
+          cp gallery_result.json output/ 2>/dev/null || true
+      - name: Push to sample-reel branch
+        if: always()
+        working-directory: naami
+        run: |
+          mkdir -p /tmp/prev && cp output/reel.mp4 output/contact.jpg output/report.txt output/error.txt output/gallery_result.json /tmp/prev/ 2>/dev/null || true
+          cd ../ci
+          git config user.name github-actions; git config user.email actions@users.noreply.github.com
+          git checkout --orphan sample-reel; git rm -rf . -q || true
+          cp /tmp/prev/* . 2>/dev/null || echo "nothing produced" > report.txt
+          git add -A; git commit -m "sample reel (photo only)" -q
+          git push -f origin sample-reel
