@@ -1,0 +1,27 @@
+name: Keepalive
+
+# Render free tier sleeps after 15 min without traffic; while asleep NO scheduler runs (X posts, Buyers, Top Finds,
+# Daily Essential all stop). This pings the tiny /healthz endpoint every 5 min so the bot stays awake all day.
+# Public repo = unlimited free Actions minutes. (GitHub may delay scheduled runs by a few minutes; 5 min leaves enough margin.)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping Render
+        run: |
+          URL="https://naami-r6ux.onrender.com/healthz"
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -m 70 -w '%{http_code}' "$URL" || true)
+            echo "attempt $i -> HTTP ${code:-000}"
+            # any HTTP answer means the service is awake (404 just means /healthz is not deployed yet)
+            if [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]; then exit 0; fi
+            sleep 20
+          done
+          echo "service did not answer after 3 tries"
