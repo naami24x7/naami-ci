@@ -40,7 +40,7 @@ jobs:
         working-directory: naami
         env:
           JOB_ID: gallery_sample
-          ASINS: '["B0HCC15FNZ","B0HG8ZHBWN","B0HGXTDJF8","B0F3X9LQQJ"]'
+          ASINS: '["B0HCC15FNZ","B0HG8ZHBWN","B0HGXTDJF8","B0F3X9LQQJ","B0HFX2ZBG4","B0HKMX6T8R","B0HDYY4XRV"]'
         run: |
           python -m x.gallery_ci
           cp ../ci/hot.json . ; cp ../ci/sample_prep.py .
