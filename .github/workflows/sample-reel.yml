@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+        continue-on-error: true
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -37,7 +40,7 @@ jobs:
         working-directory: naami
         env:
           JOB_ID: gallery_sample
-          ASINS: '["B07P1SFHK3","B07VWT4XRG","B0FL554TG9","B0HGXTDJF8","B0HCC15FNZ","B0F3X9LQQJ","B0HG8ZHBWN"]'
+          ASINS: '["B0HCC15FNZ","B0HG8ZHBWN","B0HGXTDJF8","B0F3X9LQQJ"]'
         run: |
           python -m x.gallery_ci
           cp ../ci/hot.json . ; cp ../ci/sample_prep.py .
