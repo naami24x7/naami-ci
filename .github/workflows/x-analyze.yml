@@ -13,7 +13,7 @@ on:
         default: "15"
       parent_sample:
         description: "How many of our replies to check in their thread"
-        default: "40"
+        default: "25"
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +56,7 @@ jobs:
           IN_DAYS: ${{ github.event.inputs.days }}
           IN_SAMPLE: ${{ github.event.inputs.parent_sample }}
         run: |
-          echo "{\"days\": ${IN_DAYS:-15}, \"parent_sample\": ${IN_SAMPLE:-40}, \"max_pages\": 14, \"expect_username\": \"zoepicks\"}" > payload.json
+          echo "{\"days\": ${IN_DAYS:-15}, \"parent_sample\": ${IN_SAMPLE:-40}, \"max_pages\": 60, \"expect_username\": \"zoepicks\"}" > payload.json
           python x_timeline_analyze.py payload.json
 
       - name: Push result to the private Naami repo
