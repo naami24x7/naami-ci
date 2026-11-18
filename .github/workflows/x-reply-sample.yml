@@ -1,0 +1,45 @@
+name: X Reply Sample
+
+# Runs in the PUBLIC naami-ci repo (free Actions minutes). Generates REAL Groq sample replies through the Engage + Buyers code paths
+# (x_reply_sample.py). Nothing is posted. Result is pushed to the PRIVATE Naami repo (.github/x-samples/latest.json).
+# Secrets on THIS repo: CI_GH_TOKEN, GROQ_API_KEY
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Generate samples (Groq)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python x_reply_sample.py
+
+      - name: Push result to the private Naami repo
+        if: always()
+        run: |
+          mkdir -p .github/x-samples
+          cp x_reply_sample_result.json .github/x-samples/latest.json 2>/dev/null || echo '{"error": "no output"}' > .github/x-samples/latest.json
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/x-samples/latest.json
+          git commit -m "ci: x-reply-sample result (auto)" || true
+          git pull --rebase -q || true
+          git push || true
