@@ -56,7 +56,7 @@ jobs:
           IN_DAYS: ${{ github.event.inputs.days }}
           IN_SAMPLE: ${{ github.event.inputs.parent_sample }}
         run: |
-          echo "{\"days\": ${IN_DAYS:-15}, \"parent_sample\": ${IN_SAMPLE:-40}, \"max_pages\": 14, \"expect_username\": \"iamcartigo\"}" > payload.json
+          echo "{\"days\": ${IN_DAYS:-15}, \"parent_sample\": ${IN_SAMPLE:-40}, \"max_pages\": 14, \"expect_username\": \"zoepicks\"}" > payload.json
           python x_timeline_analyze.py payload.json
 
       - name: Push result to the private Naami repo
