@@ -1,0 +1,72 @@
+name: X Analyze
+
+# Runs in the PUBLIC naami-ci repo (free Actions minutes). Naami code is private and is checked out at run time with CI_GH_TOKEN.
+# Secrets on THIS repo: CI_GH_TOKEN (PAT: read+write on naami24x7/Naami), X_SESSION_JSON
+# READ-ONLY account analysis (x_timeline_analyze.py): own posts/replies of the last N days with views, thread visibility of our replies,
+# search visibility. Result is pushed to the PRIVATE Naami repo (.github/x-analysis/latest.json), not to this public repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "How many days back"
+        default: "15"
+      parent_sample:
+        description: "How many of our replies to check in their thread"
+        default: "40"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: naami24x7/Naami
+          token: ${{ secrets.CI_GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install twikit httpx
+
+      - name: Write X session file
+        env:
+          X_SESSION_JSON: ${{ secrets.X_SESSION_JSON }}
+        run: |
+          if [ -z "$X_SESSION_JSON" ]; then echo "X_SESSION_JSON secret missing"; exit 1; fi
+          echo "$X_SESSION_JSON" > x_session.json
+
+      - name: Fetch pinned device profile
+        env:
+          GH_TOKEN: ${{ secrets.CI_GH_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/naami24x7/Naami/contents/.github/x-session-state/device_profile.json" \
+            -o x_device_profile.json
+          if head -c 20 x_device_profile.json 2>/dev/null | grep -q '"message"'; then rm -f x_device_profile.json; fi
+
+      - name: Analyze timeline (read-only)
+        env:
+          IN_DAYS: ${{ github.event.inputs.days }}
+          IN_SAMPLE: ${{ github.event.inputs.parent_sample }}
+        run: |
+          echo "{\"days\": ${IN_DAYS:-15}, \"parent_sample\": ${IN_SAMPLE:-40}, \"max_pages\": 14, \"expect_username\": \"iamcartigo\"}" > payload.json
+          python x_timeline_analyze.py payload.json
+
+      - name: Push result to the private Naami repo
+        if: always()
+        run: |
+          mkdir -p .github/x-analysis
+          cp x_analysis_result.json .github/x-analysis/latest.json 2>/dev/null || echo '{"success": false, "error": "analyzer produced no output"}' > .github/x-analysis/latest.json
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/x-analysis/latest.json
+          git commit -m "ci: x-analysis result (auto)" || true
+          git pull --rebase -q || true
+          git push || true
